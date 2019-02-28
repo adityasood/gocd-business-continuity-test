@@ -1,85 +1,98 @@
+version: '3'
+
+networks:
+  gocd_bc_nw:
+    external: true
+
 # Shared drive for ... sharing files.
-share:
-  image: cogniteev/echo
-  volumes:
-    - /share
+volumes:
+  share:
 
-# DB for primary Go Server
-primarydb:
-  build: dependencies/pg-primary-with-replication
+services:
 
-  volumes_from:
-    - share
+  # DB for primary Go Server
+  primarydb:
+    build: dependencies/pg-primary-with-replication
 
-  environment:
-    - POSTGRES_USER=go
-    - POSTGRES_PASSWORD=password1
+    volumes:
+      - share
+    networks:
+      - gocd_bc_nw
 
-# Primary Go Server
-primarygo:
-  # Build this image using https://hub.docker.com/r/gocd/gocd-server/, with the right commit that you need for testing.
-  image: gocd-server:gocd-server-for-bc-test
+    environment:
+      - POSTGRES_USER=go
+      - POSTGRES_PASSWORD=password1
 
-  links:
-    - primarydb:db
+  # Primary Go Server
+  primarygo:
+    # Build this image using https://hub.docker.com/r/gocd/gocd-server/, with the right commit that you need for testing.
+    image: gocd-server:gocd-server-for-bc-test
 
-  command: ["./godata/init.sh"]
 
-  environment:
-    - GO_SERVER_SYSTEM_PROPERTIES=-Dgo.database.provider=com.thoughtworks.go.postgresql.PostgresqlDatabase -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005
+    command: ["./godata/init.sh"]
 
-  volumes:
-    - ./dependencies/postgresqldb.properties:/godata/config/postgresqldb.properties
-    - ./dependencies/go-primary:/godata
-    - ./dependencies/go-primary/init.sh:/init.sh
+    environment:
+      - GO_SERVER_SYSTEM_PROPERTIES=-Dgo.database.provider=com.thoughtworks.go.postgresql.PostgresqlDatabase -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005
+      - DB_HOST_OR_IP=primarydb
 
-  ports:
-    - "8153"
-    - "8154"
-    - "5005"
+    volumes:
+      - ./dependencies/postgresqldb.primary.properties:/godata/config/postgresqldb.properties
+      - ./dependencies/go-primary:/godata
+      - ./dependencies/go-primary/init.sh:/init.sh
+    
+    networks:
+      - gocd_bc_nw
 
-  privileged: true
+    ports:
+      - "8153"
+      - "8154"
+      - "5005"
 
-# DB for secondary Go Server
-secondarydb:
-  build: dependencies/pg-standby
+    privileged: true
 
-  links:
-    - primarydb
+  # DB for secondary Go Server
+  secondarydb:
+    build: dependencies/pg-standby
 
-  volumes_from:
-    - share
+    volumes:
+      - share
+    
+    networks:
+      - gocd_bc_nw
 
-# Secondary Go Server
-secondarygo:
-  # Build this image using https://hub.docker.com/r/gocd/gocd-server/, with the right commit that you need for testing.
-  image: gocd-server:gocd-server-for-bc-test
+  # Secondary Go Server
+  secondarygo:
+    # Build this image using https://hub.docker.com/r/gocd/gocd-server/, with the right commit that you need for testing.
+    image: gocd-server:gocd-server-for-bc-test
 
-  links:
-    - secondarydb:db
-    - primarygo:primarygo
+    command: ["./godata/init.sh"]
 
-  command: ["./godata/init.sh"]
+    environment:
+      - GO_SERVER_SYSTEM_PROPERTIES=-Dgo.database.provider=com.thoughtworks.go.postgresql.PostgresqlDatabase -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005 -Dgo.server.mode=standby -Dbc.primary.url=https://primarygo:8154
+      - DB_HOST_OR_IP=secondarydb
 
-  environment:
-    - GO_SERVER_SYSTEM_PROPERTIES=-Dgo.database.provider=com.thoughtworks.go.postgresql.PostgresqlDatabase -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005 -Dgo.server.mode=standby -Dbc.primary.url=https://primarygo:8154
+    volumes:
+      - ./dependencies/postgresqldb.secondary.properties:/godata/config/postgresqldb.properties
+      - ./dependencies/go-secondary:/godata
+      - ./dependencies/go-secondary/init.sh:/init.sh
 
-  volumes:
-    - ./dependencies/postgresqldb.properties:/godata/config/postgresqldb.properties
-    - ./dependencies/go-secondary:/godata
-    - ./dependencies/go-secondary/init.sh:/init.sh
+    networks:
+      - gocd_bc_nw
 
-  ports:
-    - "8153"
-    - "8154"
-    - "5005"
+    ports:
+      - "8153"
+      - "8154"
+      - "5005"
 
-  privileged: true
+    privileged: true
 
-# A Go Agent, setup to use the virtual IP (172.17.17.17). You need to setup this up manually.
-agent1:
-  image: gocd-agent-centos-7:gocd-agent-for-bc-test
+  # A Go Agent, setup to use the virtual IP (172.17.17.17). You need to setup this up manually.
+  agent1:
+    image: gocd-agent-centos-7:gocd-agent-for-bc-test
 
-  environment:
-    - GO_SERVER=172.17.17.17
-    - AGENT_AUTO_REGISTER_KEY=123456789abcdef
+    environment:
+      - GO_SERVER=primarygo
+      - AGENT_AUTO_REGISTER_KEY=123456789abcdef
+    
+    networks:
+      - gocd_bc_nw
